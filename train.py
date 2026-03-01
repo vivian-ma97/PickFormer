@@ -26,10 +26,7 @@ def save_checkpoint(epoch, model, optimizer, scheduler, scaler, path):
         "scaler": scaler.state_dict() if scaler is not None else None,
     }
     torch.save(ckpt, path)
-
-# =========================
-# 复现实验：设随机种子
-# =========================
+    
 def set_seed(seed: int = 42):
     random.seed(seed); np.random.seed(seed)
     torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
@@ -224,8 +221,6 @@ def validate_one_epoch(model, loader, device, num_classes=2, deep_supervision=Tr
 
 def main():
     set_seed(0)
-
-    # ===== 路径配置 =====
     train_path = 'train_npy/image'
     train_mask_path = 'train_npy/mask'
     val_path = 'val_npy/image'
@@ -343,3 +338,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
