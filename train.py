@@ -1,4 +1,4 @@
-
+# train_pickformer_v2.py
 import os
 import math
 import random
@@ -13,8 +13,19 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
-from util_new import ImageSliceDataset, DualCompose, DualResize  # 你的数据管线
-from PickFormer_v2 import PickFormer, total_loss  # 你的模型与综合损失（深监督）
+
+from util_new import ImageSliceDataset, DualCompose, DualResize 
+from PickFormer_v2 import PickFormer, total_loss                
+
+def save_checkpoint(epoch, model, optimizer, scheduler, scaler, path):
+    ckpt = {
+        "epoch": epoch,
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict() if scheduler is not None else None,
+        "scaler": scaler.state_dict() if scaler is not None else None,
+    }
+    torch.save(ckpt, path)
 
 # =========================
 # 复现实验：设随机种子
@@ -25,9 +36,6 @@ def set_seed(seed: int = 42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# =========================
-# 指标累计器（含安全 Kappa）
-# =========================
 class BinaryConfusionMeter:
     def __init__(self):
         self.tp = 0; self.fp = 0; self.fn = 0; self.tn = 0
@@ -79,21 +87,16 @@ class BinaryConfusionMeter:
             "Kappa": float(self.safe_kappa())
         }
 
-# =========================
-# 小工具：兼容主/多头输出
-# =========================
+
 def get_main_logits(outputs: Union[torch.Tensor, Tuple[torch.Tensor, ...]]) -> torch.Tensor:
     if isinstance(outputs, (list, tuple)):
         return outputs[0]
     return outputs
 
-# =========================
-# 单头损失（兜底用）
-# =========================
 import torch.nn.functional as F
 
 def _fg_logits(logits, num_classes: int):
-    # 两通道时，约定通道1为前景；单通道直接用
+
     return logits if logits.shape[1] == 1 or num_classes == 1 else logits[:, 1:2, ...]
 
 def dice_loss_only(logits, targets, num_classes=2, eps=1e-6):
@@ -120,9 +123,6 @@ def single_head_total_loss(logits, targets, num_classes=2, pos_weight=None, w_ed
     return bce_edge_combo(logits, targets, num_classes, pos_weight, w_edge) + \
            dice_loss_only(logits, targets, num_classes)
 
-# =========================
-# 训练与验证
-# =========================
 def train_one_epoch(model, loader, optimizer, device, scaler, num_classes=2,
                     pos_weight=None, w_edge=0.2, deep_supervision=True):
     model.train()
@@ -143,7 +143,6 @@ def train_one_epoch(model, loader, optimizer, device, scaler, num_classes=2,
             outputs = model(images)
             if deep_supervision and isinstance(outputs, (list, tuple)) and len(outputs) >= 3:
                 logits_main, logits_aux2, logits_aux3 = outputs[:3]
-                # ✅ 用关键字参数调用 total_loss
                 loss = total_loss(
                     logits_main=logits_main,
                     logits_aux2=logits_aux2,
@@ -156,7 +155,6 @@ def train_one_epoch(model, loader, optimizer, device, scaler, num_classes=2,
                 logits = logits_main
             else:
                 logits = get_main_logits(outputs)
-                # ✅ 单头路径：不用把 logits 传三遍，直接用兜底损失
                 loss = single_head_total_loss(
                     logits=logits,
                     targets=masks,
@@ -223,9 +221,7 @@ def validate_one_epoch(model, loader, device, num_classes=2, deep_supervision=Tr
     metrics = meter.summary()
     return avg_loss, metrics
 
-# =========================
-# 主程序
-# =========================
+
 def main():
     set_seed(0)
 
@@ -234,16 +230,14 @@ def main():
     train_mask_path = 'train_npy/mask'
     val_path = 'val_npy/image'
     val_mask_path = 'val_npy/mask'
-
-    os.makedirs('logs_v2_2', exist_ok=True)
-    os.makedirs('models_v2_2', exist_ok=True)
-
-    # ===== 变换（mask 最近邻请在 Dataset 内保证）=====
+    #2 head
+    os.makedirs('logs_v2', exist_ok=True)
+    os.makedirs('models_v2', exist_ok=True)
     transformer = DualCompose([
         DualResize((512, 512)),
     ])
 
-    # ===== 数据集 & 加载器 =====
+
     train_dataset = ImageSliceDataset(
         img_npy_folder=train_path, mask_folder=train_mask_path,
         step=400, transform=transformer,
@@ -258,9 +252,9 @@ def main():
     )
 
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=1, pin_memory=True)
-    val_loader   = DataLoader(val_dataset,   batch_size=8, shuffle=False, num_workers=1, pin_memory=True)
+    val_loader   = DataLoader(val_dataset,   batch_size=16, shuffle=False, num_workers=1, pin_memory=True)
 
-    # ===== 设备 =====
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     if device.type == 'cuda':
@@ -270,47 +264,44 @@ def main():
             pass
         torch.backends.cudnn.benchmark = True
 
-    # ===== 模型 =====
-    # 如果你的 PickFormer_v2 返回 (main, aux2, aux3)，置 True；若只返回一个 logits，则置 False
     deep_supervision = True
     model = PickFormer(num_classes=2).to(device)
 
-    # ===== 优化器 & 调度器 =====
-    #base_lr = 1e-4
-    base_lr = 1e-4   #second try
-    optimizer = optim.AdamW(model.parameters(), lr=base_lr, weight_decay=1e-5)
-    num_epochs = 200
+
+    base_lr = 1e-4
+    optimizer = optim.AdamW(model.parameters(), lr=base_lr, weight_decay=1e-4)
+    num_epochs = 100
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-6)
 
     # ===== AMP =====
     scaler = GradScaler(enabled=True)
 
-    # ===== 训练循环 =====
+
     best_val_loss = float('inf')
     best_val_dice = -1.0
     best_state_loss = None
     best_state_dice = None
 
-    log_file = open('logs_v2_2/training_log.txt', 'a', encoding='utf-8')
+    log_file = open('logs_v2/training_log.txt', 'a', encoding='utf-8')
 
     for epoch in range(1, num_epochs + 1):
-        # 训练
+      
         train_loss, train_metrics = train_one_epoch(
             model, train_loader, optimizer, device, scaler,
             num_classes=2, pos_weight=None, w_edge=0.2,
             deep_supervision=deep_supervision
         )
 
-        # 验证
+     
         val_loss, val_metrics = validate_one_epoch(
             model, val_loader, device, num_classes=2,
             deep_supervision=deep_supervision
         )
 
-        # 调度
+ 
         scheduler.step()
 
-        # 打印
+ 
         msg = (f"Epoch [{epoch}/{num_epochs}] "
                f"| TrainLoss {train_loss:.4f}  mIoU {train_metrics['mIoU']:.4f}  Dice {train_metrics['Dice']:.4f}  "
                f"Kappa {train_metrics['Kappa']:.4f}  F1 {train_metrics['F1-score']:.4f} || "
@@ -319,17 +310,29 @@ def main():
         print(msg)
         log_file.write(msg + "\n"); log_file.flush()
 
-        # —— 保存最优（按最小验证损失）
+
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_state_loss = {k: v.cpu() for k, v in model.state_dict().items()}
-            torch.save(best_state_loss, 'models_v2_2/best_by_val_loss.pth')
+            torch.save(best_state_loss, 'models_v2/best_by_val_loss.pth')
 
-        # —— 保存最优（按最大验证 Dice）
+
         if val_metrics['Dice'] > best_val_dice:
             best_val_dice = val_metrics['Dice']
             best_state_dice = {k: v.cpu() for k, v in model.state_dict().items()}
-            torch.save(best_state_dice, 'models_v2_2/best_by_val_dice.pth')
+            torch.save(best_state_dice, 'models_v2/best_by_val_dice.pth')
+
+     
+        if epoch % 2 == 0:
+            ckpt_path = os.path.join("models_v2", f"ckpt_epoch_{epoch:04d}.pth")
+            save_checkpoint(
+                epoch=epoch,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                path=ckpt_path
+            )
 
     log_file.close()
     print("Training done.")
