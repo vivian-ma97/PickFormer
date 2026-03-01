@@ -71,14 +71,11 @@ PickFormer is validated on multiple airborne ice-penetrating radar (IPR) dataset
 > When downloading or citing the datasets, please comply with the data usage policies and copyright statements of the respective data providers.
 
 After downloading the datasets, please convert the .mat files into .npy format before using them for training or inference.
-
-##  Step 1: Convert MAT Files to NPY Format
-
 Run the following script to convert the downloaded `.mat` radar files into `.npy` format:
 
 ```bash
 python Convert_npy.py
-
+```
 
 ## 📁 Project Structure
 
@@ -102,8 +99,6 @@ conda activate pickformer
 
 pip install -r requirements.txt
 ```
-
----
 
 ## 🏋️ Training
 
