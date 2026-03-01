@@ -10,7 +10,7 @@ import torchvision.utils as vutils
 import torch.nn.functional as F
 
 from util_new import ImageSliceDataset, DualCompose, DualResize
-from PickFormer_v2 import PickFormer  # 你的模型
+from PickFormer_v2 import PickFormer 
 
 class BinaryConfusionMeter:
     def __init__(self):
@@ -221,4 +221,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
