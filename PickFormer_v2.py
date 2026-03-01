@@ -7,9 +7,7 @@ import cv2
 import timm
 from timm.models.layers import DropPath
 
-# ===============================
-# 频率通道注意力（保留你原思路）
-# ===============================
+
 class FrequencyChannelAttention(nn.Module):
     def __init__(self, channels: int, reduction: int = 16,
                  low_ratio: float = 0.10, high_ratio: float = 0.40):
@@ -56,9 +54,7 @@ class FrequencyChannelAttention(nn.Module):
         gate = self.mlp(spatial_desc + freq_desc).view(B, C, 1, 1)
         return x * gate
 
-# ===============================
-# 基础卷积
-# ===============================
+
 class ConvBNReLU(nn.Sequential):
     def __init__(self, in_ch, out_ch, k=3, d=1, s=1, bias=False):
         pad = ((s - 1) + d * (k - 1)) // 2
@@ -82,10 +78,6 @@ class Conv(nn.Sequential):
         super().__init__(
             nn.Conv2d(in_ch, out_ch, k, s, padding=pad, dilation=d, bias=bias)
         )
-
-# ===============================
-# Global-Local Attention + Block（沿用你的）
-# ===============================
 
 ###change tou
 class GlobalLocalAttention(nn.Module):
@@ -122,7 +114,7 @@ class Mlp(nn.Module):
         return self.drop(x)
 
 class Block(nn.Module):
-    def __init__(self, dim=128, num_heads=2, mlp_ratio=4., drop_path=0., window_size=8):
+    def __init__(self, dim=128, num_heads=8, mlp_ratio=4., drop_path=0., window_size=8):
         super().__init__()
         self.norm1 = nn.BatchNorm2d(dim)
         self.attn = GlobalLocalAttention(dim, num_heads, window_size)
@@ -135,9 +127,7 @@ class Block(nn.Module):
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 
-# ===============================
-# 轻量 SPP（可选，顶部补感受野）
-# ===============================
+
 class LiteSPP(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -153,20 +143,15 @@ class LiteSPP(nn.Module):
         y3 = F.interpolate(self.b3(x), size=(H, W), mode='bilinear', align_corners=False)
         return self.proj(torch.cat([x, y1, y2, y3], dim=1))
 
-# ===============================
-# 解码器：FPN式逐级融合 + FCA（更平滑）
-# ===============================
 class Decoder(nn.Module):
     def __init__(self, enc_chs, decode_ch=16, num_classes=2, window_size=8, use_spp=True):
         super().__init__()
         c1, c2, c3, c4 = enc_chs
         self.top = LiteSPP(c4, decode_ch) if use_spp else nn.Conv2d(c4, decode_ch, 1, bias=False)
 
-        # lateral 统一到 decode_ch
         self.lat3 = nn.Conv2d(c3, decode_ch, 1, bias=False)
         self.lat2 = nn.Conv2d(c2, decode_ch, 1, bias=False)
 
-        # 融合后：Block + FCA 细化
         self.p4_blk = Block(decode_ch, num_heads=1, window_size=window_size)
         self.p4_fca = FrequencyChannelAttention(decode_ch)
 
@@ -175,8 +160,7 @@ class Decoder(nn.Module):
 
         self.p2_blk = Block(decode_ch, num_heads=1, window_size=window_size)
         self.p2_fca = FrequencyChannelAttention(decode_ch)
-
-        # 最后再平滑几下
+        
         self.smooth3 = ConvBNReLU(decode_ch, decode_ch, k=3)
         self.smooth2 = ConvBNReLU(decode_ch, decode_ch, k=3)
 
@@ -188,27 +172,24 @@ class Decoder(nn.Module):
         )
 
     def forward(self, r1, r2, r3, r4, H, W):
-        # 顶层
+    
         p4 = self.top(r4)                 # [B,dc,h4,w4]
         p4 = self.p4_fca(self.p4_blk(p4))
 
-        # 融合到 P3
+     
         p3 = self.lat3(r3) + F.interpolate(p4, size=r3.shape[-2:], mode='bilinear', align_corners=False)
         p3 = self.p3_fca(self.p3_blk(p3))
         p3 = self.smooth3(p3)
 
-        # 融合到 P2（再平滑）
+       
         p2 = self.lat2(r2) + F.interpolate(p3, size=r2.shape[-2:], mode='bilinear', align_corners=False)
         p2 = self.p2_fca(self.p2_blk(p2))
         p2 = self.smooth2(p2)
 
-        # 输出到原尺寸
+     
         logits = self.head(F.interpolate(p2, size=(H, W), mode='bilinear', align_corners=False))
         return logits
 
-# ===============================
-# 主网络
-# ===============================
 class PickFormer(nn.Module):
     def __init__(self, backbone_name="swsl_resnet18", decode_channels=64, num_classes=2, pretrained=True, use_spp=True):
         super().__init__()
@@ -224,9 +205,6 @@ class PickFormer(nn.Module):
         r1, r2, r3, r4 = self.backbone(x)
         return self.decoder(r1, r2, r3, r4, H, W)
 
-# ===============================
-# 训练用损失：BCE + Dice + Edge (+ 可选TV)
-# ===============================
 def _fg_logits(logits, num_classes: int):
     return logits if logits.shape[1] == 1 or num_classes == 1 else logits[:, 1:2, ...]
 
@@ -264,24 +242,21 @@ def total_loss(logits, targets, num_classes=2, pos_weight=None, w_edge=0.2, w_tv
            w_edge * edge_loss(logits, targets, num_classes) + \
            (tv_loss(logits, num_classes) if w_tv > 0 else 0.0)
 
-# ===============================
-# 推理后处理：平滑/去小连通域（提升连贯性）
-# ===============================
 def postprocess_smooth(prob_map: np.ndarray,
                        thresh: float = 0.5,
                        min_cc_area: int = 50,
                        morph_ksize: int = 3) -> np.ndarray:
     """
     prob_map: float HxW in [0,1]
-    返回: uint8 HxW {0,255}
+    return: uint8 HxW {0,255}
     """
     pred = (prob_map >= thresh).astype(np.uint8)
     if morph_ksize > 0:
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_ksize, morph_ksize))
-        # 先闭运算填小洞，再开运算去毛刺
+
         pred = cv2.morphologyEx(pred, cv2.MORPH_CLOSE, k)
         pred = cv2.morphologyEx(pred, cv2.MORPH_OPEN,  k)
-    # 去小连通域
+
     if min_cc_area > 0:
         num, labels, stats, _ = cv2.connectedComponentsWithStats(pred, connectivity=8)
         keep = np.zeros_like(pred)
@@ -292,9 +267,7 @@ def postprocess_smooth(prob_map: np.ndarray,
         pred = keep
     return (pred * 255).astype(np.uint8)
 
-# ===============================
-# 快速自检
-# ===============================
+
 
 """
 
@@ -305,14 +278,15 @@ if __name__ == "__main__":
     y = model(x)  # [B,2,H,W]
     print("Logits:", y.shape)
 
-    # 假 targets
+
     t = (torch.rand(2, 1, 512, 512) > 0.8).to(device).long()
     loss = total_loss(y, t, num_classes=2, w_edge=0.2, w_tv=1e-4)
     print("Loss:", float(loss))
 
-    # 后处理示例
+
     with torch.no_grad():
         probs = torch.sigmoid(y[:, 1:2]).cpu().numpy()[0, 0]
         pp = postprocess_smooth(probs, thresh=0.5, min_cc_area=50, morph_ksize=3)
         print("Postprocessed mask shape:", pp.shape, "unique:", np.unique(pp))
+
 """
