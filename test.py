@@ -70,7 +70,7 @@ def get_main_logits(outputs):
 
 
 def to_uint8(x: torch.Tensor):
-    # x: [H,W] 或 [1,H,W]
+    # x: [H,W]  [1,H,W]
     if x.ndim == 3 and x.shape[0] == 1:
         x = x.squeeze(0)
     x = x.float()
@@ -90,7 +90,7 @@ def save_mask_png(mask01: torch.Tensor, path: str):
     vutils.save_image(png.unsqueeze(0).float() / 255.0, path)
 
 def save_prob_png(prob01: torch.Tensor, path: str):
-    # prob01: [H,W] in [0,1] -> 0/255 灰度
+    # prob01: [H,W] in [0,1] -> 0/255 
     png = (prob01.clamp(0,1) * 255.0).byte()
     vutils.save_image(png.unsqueeze(0).float() / 255.0, path)
 
@@ -221,5 +221,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
