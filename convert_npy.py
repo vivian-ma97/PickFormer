@@ -10,7 +10,7 @@ def process_and_save_mat_to_npy(mat_file_path, npy_file_path):
     :param npy_file_path: Path to save the output .npy file.
     """
 
-    # 加载 .mat 文件
+   
     mat_data = loadmat(mat_file_path)
 
 
@@ -18,7 +18,7 @@ def process_and_save_mat_to_npy(mat_file_path, npy_file_path):
 
     data = 10 * np.log10(data)
 
-    # 将数据保存为 .npy 文件
+ 
     np.save(npy_file_path, data)
     print(f"Saved {mat_file_path} as {npy_file_path}")
 
@@ -32,7 +32,7 @@ def process_all_mat_files(mat_folder_path, npy_folder_path):
     os.makedirs(npy_folder_path, exist_ok=True)
 
     for mat_file in os.listdir(mat_folder_path):
-        if mat_file.endswith('.mat'):  # 只处理 .mat 文件
+        if mat_file.endswith('.mat'):  
             mat_file_path = os.path.join(mat_folder_path, mat_file)
             npy_file_path = os.path.join(npy_folder_path, mat_file.replace('.mat', '.npy'))
 
@@ -53,7 +53,8 @@ train_npy_path = 'test_an_npy/image'   # Directory to store the output .npy file
 #test_mat_path = 'test'
 #test_npy_path = 'test_npy/image'
 
-# 1. 处理 .mat 文件并保存为 .npy
+
 process_all_mat_files(train_mat_path, train_npy_path)
 #process_all_mat_files(val_mat_path, val_npy_path)
+
 #process_all_mat_files(test_mat_path, test_npy_path)
